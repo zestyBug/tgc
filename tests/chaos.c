@@ -1,6 +1,7 @@
-#include "mini_test.hpp"
-#include <array>
+#include <stdint.h>
 #include <stdlib.h>
+#include <time.h>
+#include <stdio.h>
 
 #define TGC_CUSTOM_HASH
 size_t tgc_hash(void *ptr) {
@@ -14,25 +15,29 @@ size_t tgc_hash(void *ptr) {
 const int entity_count = 1024;
 const int test_count = 300;
 
-struct p64_struct {
-    p64_struct* values[8] = {nullptr};
-};
+typedef struct p64_struct {
+    struct p64_struct* values[8];
+} p64_struct;
 
 tgc_t gc;
-std::array<p64_struct*,entity_count> *ptrs = nullptr;
+p64_struct** ptrs = NULL;
 int balance = 0;
 int balance_expected = 0;
 
+void dtor(void *){
+    balance--;
+}
+
+#define EXPECT_EQ(A,B) if((A)!=(B)){printf("%s:%d Expected %ld == %ld\n",__FILE__, __LINE__,(size_t)A,(size_t)B);exit(1);}
+#define EXPECT_NE(A,B) if((A)==(B)){printf("%s:%d Expected %ld == %ld\n",__FILE__, __LINE__,(size_t)A,(size_t)B);exit(1);}
 
 // initialize test
-TEST(test0)
+void test0()
 {
-    tgc_start(&gc, ptrs->end());
-
     for (int i = 0; i < entity_count; i++) {
-        ptrs->at(i) = (p64_struct*)tgc_alloc_opt(&gc, sizeof(p64_struct), 0, [](void*){balance--;});
-        EXPECT_NE(ptrs->at(i),(void*)0x0);
-        new (ptrs->at(i)) p64_struct();
+        ptrs[i] = (p64_struct*)tgc_alloc_opt(&gc, sizeof(p64_struct), 0, dtor);
+        EXPECT_NE(ptrs[i],(void*)0x0);
+        memset(ptrs[i],0,sizeof(p64_struct));
         balance++;
         balance_expected++;
     }
@@ -43,15 +48,15 @@ TEST(test0)
 }
 
 // add pointer to pointer
-TEST(test1)
+void test1()
 {
     for (int i = 0; i < test_count;i++){
-        long rng = random() % entity_count;
-        if(ptrs->at(rng)->values[0] == nullptr)
+        long rng = rand() % entity_count;
+        if(ptrs[rng]->values[0] == NULL)
         {
-            ptrs->at(rng)->values[0] = (p64_struct*) tgc_alloc_opt(&gc, sizeof(p64_struct), 0, [](void*){balance--;});
-            EXPECT_NE(ptrs->at(rng)->values[0],(void*)0x0);
-            new (ptrs->at(rng)->values[0]) p64_struct();
+            ptrs[rng]->values[0] = (p64_struct*) tgc_alloc_opt(&gc, sizeof(p64_struct), 0, dtor);
+            EXPECT_NE(ptrs[rng]->values[0],(void*)0x0);
+            memset(ptrs[rng]->values[0],0,sizeof(p64_struct));
             balance++;
             balance_expected++;
         }
@@ -62,11 +67,11 @@ TEST(test1)
 }
 
 // duplicate (must be no change)
-TEST(test2)
+void test2()
 {
     for (int i = 0; i < test_count; i++){
-        long rng = random() % entity_count;
-        tgc_add_ptr(&gc, ptrs->at(rng), sizeof(p64_struct), 0, [](void*){balance--;});
+        long rng = rand() % entity_count;
+        tgc_add_ptr(&gc, ptrs[rng], sizeof(p64_struct), 0, dtor);
     }
     tgc_run(&gc);
     EXPECT_EQ(balance,balance_expected);
@@ -75,13 +80,13 @@ TEST(test2)
 
 
 // delete or pass (first Half)
-TEST(test3)
+void test3()
 {
     for (int i = 0; i < entity_count/2; i++)
-        if(random()&0x7){
-            if(ptrs->at(i)->values[0])
+        if(rand()&0x7){
+            if(ptrs[i]->values[0])
                 balance_expected--;
-            tgc_free(&gc, ptrs->at(i));
+            tgc_free(&gc, ptrs[i]);
             balance_expected--;
         }
     tgc_run(&gc);
@@ -91,13 +96,13 @@ TEST(test3)
 
 
 // leave or pass (second Half)
-TEST(test4)
+void test4()
 {
     for (int i = (entity_count/2+1); i < entity_count; i++)
-        if(random()&0x7){
-            if(ptrs->at(i)->values[0])
+        if(rand()&0x7){
+            if(ptrs[i]->values[0])
                 balance_expected--;
-            ptrs->at(i) = nullptr;
+            ptrs[i] = NULL;
             balance_expected--;
         }
     tgc_run(&gc);
@@ -108,25 +113,31 @@ TEST(test4)
 
 
 // finalize
-TEST(test5)
+void test5()
 {
-    memset(ptrs->data(),0,sizeof(void*) * ptrs->size());
+    memset(ptrs,0,sizeof(p64_struct*) *entity_count);
     tgc_run(&gc);
     EXPECT_EQ(balance,0);
     EXPECT_EQ(gc.nitems,0);
 }
 
-// destroy
-TEST(test6)
-{
-    tgc_stop(&gc);
+#define EXEC(N) N();puts("SUCCESS: " #N);
+void test_run_all(){
+    p64_struct *stack_memory[entity_count];
+    ptrs = &stack_memory;
+    EXEC(test0)
+    EXEC(test1)
+    EXEC(test2)
+    EXEC(test3)
+    EXEC(test4)
+    EXEC(test5)
 }
 
-
 int main(int argc, char **argv) {
-    std::array<p64_struct*,entity_count> stack_memory;
-    ptrs = &stack_memory;
-    srandom(time(NULL));
-    mtest::run_all();
+    void *top_stack=NULL;
+    srand(time(NULL));
+    tgc_start(&gc, &top_stack);
+    test_run_all();
+    tgc_stop(&gc);
     return 0;
 }
